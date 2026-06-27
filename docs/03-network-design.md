@@ -493,3 +493,491 @@ Networking is the backbone of an OpenStack cloud.
 By separating management, provider, tenant, and storage traffic into dedicated logical networks, the platform achieves better scalability, security, and operational stability.
 
 Understanding how Neutron, Linux Bridge, VXLAN, routers, DHCP, metadata services, and Security Groups interact is essential for successfully deploying and operating an OpenStack environment.
+
+# Advanced Network Architecture
+
+## Layered Network Design
+
+A production cloud should never rely on a single physical or logical network.
+
+Instead, traffic is divided into dedicated layers according to its operational purpose.
+
+This separation improves:
+
+- Security
+- Performance
+- Availability
+- Fault isolation
+- Scalability
+
+The laboratory follows a layered network model consisting of four independent communication planes.
+
+```text
+                        +----------------------+
+                        |     Internet         |
+                        +----------+-----------+
+                                   |
+                          Provider Network
+                                   |
+          +------------------------+------------------------+
+          |                                                 |
+     Floating IP                                    External Gateway
+          |                                                 |
+          +------------------------+------------------------+
+                                   |
+                            Neutron Router
+                                   |
+                          Tenant Network (VXLAN)
+                                   |
+                     +-------------+-------------+
+                     |                           |
+                 Compute 01                  Compute 02
+                     |                           |
+                     +-------------+-------------+
+                                   |
+                           Management Network
+                                   |
+                              Controller Node
+                                   |
+                           Storage Network
+                                   |
+                     +-------------+-------------+
+                     |                           |
+                  Cinder                     Swift
+```
+
+Each network performs a dedicated function and should remain isolated from unrelated traffic whenever possible.
+
+---
+
+# Network Segmentation
+
+OpenStack distinguishes infrastructure traffic from workload traffic.
+
+The following segmentation strategy is recommended.
+
+| Network    | Purpose               | Internet Accessible |
+| ---------- | --------------------- | ------------------- |
+| Management | OpenStack APIs        | No                  |
+| Provider   | External Connectivity | Yes                 |
+| VXLAN      | Tenant Overlay        | No                  |
+| Storage    | Volume Replication    | No                  |
+
+Network segmentation reduces broadcast domains, minimizes congestion, and improves security.
+
+---
+
+# East-West vs North-South Traffic
+
+Understanding traffic direction is fundamental when troubleshooting OpenStack networking.
+
+## East-West Traffic
+
+East-West traffic refers to communication between virtual machines inside the cloud.
+
+Example:
+
+```text
+VM A
+
+↓
+
+Linux Bridge
+
+↓
+
+VXLAN Tunnel
+
+↓
+
+Compute Node
+
+↓
+
+Linux Bridge
+
+↓
+
+VM B
+```
+
+Characteristics:
+
+- Internal communication
+- Does not require Floating IPs
+- Routed through overlay networks
+- Usually lower latency
+
+---
+
+## North-South Traffic
+
+North-South traffic enters or leaves the cloud.
+
+Example:
+
+```text
+Internet
+
+↓
+
+Provider Network
+
+↓
+
+Neutron Router
+
+↓
+
+Floating IP
+
+↓
+
+Tenant Network
+
+↓
+
+Virtual Machine
+```
+
+This path involves NAT and routing services provided by Neutron.
+
+---
+
+# Provider Network
+
+Provider Networks connect the cloud to external infrastructure.
+
+Responsibilities include:
+
+- Internet access
+- Floating IP allocation
+- External routing
+- Public services
+
+Unlike tenant networks, Provider Networks are typically managed by cloud administrators rather than end users.
+
+---
+
+# Self-Service Network
+
+Self-Service Networks (Tenant Networks) allow projects to create isolated virtual networks without administrator intervention.
+
+Advantages include:
+
+- Multi-tenancy
+- Isolation
+- Flexible addressing
+- Independent routing
+- Dynamic provisioning
+
+Each project may define its own:
+
+- Subnets
+- Routers
+- DHCP
+- Security Groups
+
+without impacting other tenants.
+
+---
+
+# VXLAN Overlay
+
+VXLAN is the default overlay mechanism used in many OpenStack deployments.
+
+Instead of extending Layer-2 domains physically, VXLAN encapsulates Ethernet frames inside UDP packets.
+
+```text
+Ethernet Frame
+
+↓
+
+VXLAN Header
+
+↓
+
+UDP
+
+↓
+
+IP
+
+↓
+
+Physical Network
+```
+
+Benefits include:
+
+- Up to 16 million isolated networks
+- Multi-host communication
+- Flexible tenant isolation
+- Cloud scalability
+
+VXLAN traffic is exchanged only between participating compute nodes.
+
+---
+
+# Linux Bridge Architecture
+
+Linux Bridge provides Layer-2 switching functionality.
+
+Each virtual machine interface connects to a Linux bridge before reaching the physical network.
+
+Example:
+
+```text
+Virtual Machine
+
+↓
+
+Tap Interface
+
+↓
+
+Linux Bridge
+
+↓
+
+Physical Interface
+
+↓
+
+Network
+```
+
+Responsibilities include:
+
+- MAC learning
+- Frame forwarding
+- Broadcast handling
+- Interface bridging
+
+---
+
+# Linux Bridge vs Open vSwitch
+
+Two major switching technologies are supported by OpenStack.
+
+| Feature         | Linux Bridge | Open vSwitch |
+| --------------- | ------------ | ------------ |
+| Complexity      | Low          | Medium       |
+| Performance     | Good         | Excellent    |
+| OpenFlow        | No           | Yes          |
+| SDN Integration | Limited      | Advanced     |
+| Learning Curve  | Easy         | Moderate     |
+
+Linux Bridge was selected for this laboratory because it provides a simpler deployment process while demonstrating the core networking concepts required to understand OpenStack.
+
+Open vSwitch is commonly preferred in larger production environments that require advanced SDN capabilities.
+
+---
+
+# Virtual Router Architecture
+
+Each tenant network communicates with external networks through a virtual router.
+
+Responsibilities include:
+
+- Routing
+- NAT
+- Gateway services
+- Floating IP translation
+
+Example:
+
+```text
+Tenant Network
+
+↓
+
+Router Namespace
+
+↓
+
+Provider Network
+
+↓
+
+Internet
+```
+
+The router exists as a Linux network namespace managed by Neutron.
+
+---
+
+# DHCP Service
+
+Each tenant subnet receives a dedicated DHCP service.
+
+DHCP automatically assigns:
+
+- IP address
+- Gateway
+- DNS
+- Lease duration
+
+Workflow:
+
+```text
+VM Boot
+
+↓
+
+DHCP Discover
+
+↓
+
+DHCP Agent
+
+↓
+
+Lease Assignment
+
+↓
+
+VM Ready
+```
+
+Without a functioning DHCP agent, newly created instances will fail to obtain network configuration.
+
+---
+
+# Metadata Service
+
+The Metadata Service provides instance-specific information.
+
+Examples include:
+
+- Hostname
+- SSH public keys
+- Cloud-init configuration
+- User-data scripts
+
+Request flow:
+
+```text
+Virtual Machine
+
+↓
+
+169.254.169.254
+
+↓
+
+Metadata Agent
+
+↓
+
+Nova Metadata API
+```
+
+Cloud-init depends heavily on this service during first boot.
+
+---
+
+# Floating IP Translation
+
+Floating IPs are implemented using Network Address Translation (NAT).
+
+Example:
+
+```text
+Public IP
+
+↓
+
+Floating IP
+
+↓
+
+DNAT
+
+↓
+
+Private Instance Address
+```
+
+This allows private instances to communicate with external networks while maintaining isolated tenant addressing.
+
+---
+
+# Security Group Processing
+
+Security Groups operate as stateful firewalls.
+
+Inbound example:
+
+```text
+Packet
+
+↓
+
+Security Group
+
+↓
+
+Rule Evaluation
+
+↓
+
+Accept
+
+↓
+
+Instance
+```
+
+Outbound traffic is evaluated similarly.
+
+Because Security Groups are stateful, return traffic is automatically permitted.
+
+---
+
+# MTU Considerations
+
+VXLAN introduces encapsulation overhead.
+
+Typical MTU values:
+
+| Network           | MTU            |
+| ----------------- | -------------- |
+| Physical Ethernet | 1500           |
+| VXLAN Overlay     | 1450 (example) |
+
+If MTU values are inconsistent across nodes, packet fragmentation or connectivity problems may occur.
+
+---
+
+# Common Networking Bottlenecks
+
+Potential bottlenecks include:
+
+- Broadcast storms
+- Incorrect bridge mappings
+- MTU mismatches
+- DHCP failures
+- Router namespace issues
+- Floating IP exhaustion
+- Overlay tunnel failures
+- Misconfigured Security Groups
+
+Routine monitoring and validation help detect these conditions before they affect workloads.
+
+---
+
+# Network Design Principles
+
+The laboratory follows several key principles inspired by production deployments:
+
+- Isolate management traffic.
+- Separate storage communication.
+- Use overlay networking for tenants.
+- Minimize exposure of infrastructure services.
+- Assign least-privilege firewall rules.
+- Document every subnet and interface.
+- Monitor network utilization continuously.
+- Validate connectivity after every configuration change.
+
+These principles provide a solid foundation for building scalable and maintainable OpenStack environments.
